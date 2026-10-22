@@ -1,105 +1,120 @@
-import express from 'express';
-import cors from 'cors';
-import path from 'path';
-import { Readable } from 'stream';
-import { fileURLToPath } from 'url';
+import express from "express";
+import cors from "cors";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { pipeline } from "node:stream/promises";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const PORT = process.env.PORT || 3000;
-const IG_APP_ID = '936619743392459';
+const PORT = Number(process.env.PORT) || 3000;
+const IG_APP_ID = "936619743392459";
 const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const ALPHABET =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 const app = express();
+app.disable("x-powered-by");
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.static(path.join(__dirname, "public"), { maxAge: "1h" }));
 
 function igHeaders(extra = {}) {
-  const h = {
-    'User-Agent': UA,
-    'x-ig-app-id': IG_APP_ID,
-    Accept: '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    Referer: 'https://www.instagram.com/',
+  const headers = {
+    "User-Agent": UA,
+    "x-ig-app-id": IG_APP_ID,
+    Accept: "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: "https://www.instagram.com/",
     ...extra,
   };
-  if (process.env.IG_COOKIE) h.Cookie = process.env.IG_COOKIE;
-  return h;
+  if (process.env.IG_COOKIE) headers.Cookie = process.env.IG_COOKIE;
+  return headers;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function igJson(url) {
-  const r = await fetch(url, { headers: igHeaders() });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`Instagram ${r.status}`);
+  const response = await fetchWithTimeout(url, { headers: igHeaders() });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`Instagram returned HTTP ${response.status}`);
   try {
-    return JSON.parse(text);
+    return JSON.parse(body);
   } catch {
-    throw new Error('Instagram ne invalid JSON diya');
+    throw new Error("Instagram ne readable JSON nahi diya. Endpoint badal sakta hai.");
   }
 }
 
 const cache = new Map();
 async function cached(key, ttlMs, fn) {
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.t < ttlMs) return hit.v;
-  const v = await fn();
-  cache.set(key, { t: Date.now(), v });
-  if (cache.size > 500) cache.delete(cache.keys().next().value);
-  return v;
+  if (hit && Date.now() - hit.time < ttlMs) return hit.value;
+  const value = await fn();
+  cache.set(key, { time: Date.now(), value });
+  if (cache.size > 300) cache.delete(cache.keys().next().value);
+  return value;
 }
 
 function shortcodeToId(shortcode) {
   let id = 0n;
-  for (const ch of shortcode) {
-    const v = ALPHABET.indexOf(ch);
-    if (v < 0) return null;
-    id = id * 64n + BigInt(v);
+  for (const char of shortcode) {
+    const value = ALPHABET.indexOf(char);
+    if (value < 0) return null;
+    id = id * 64n + BigInt(value);
   }
   return id.toString();
 }
 
-const pickBiggest = (arr = []) =>
-  [...arr]
-    .filter((x) => x && x.url)
-    .sort((a, b) => (b.width || 0) * (b.height || 0) - (a.width || 0) * (a.height || 0))[0] || null;
+function clean(value) {
+  return typeof value === "string"
+    ? value.replace(/\\u0026/g, "&").replace(/\\/g, "")
+    : value;
+}
 
-function clean(u) {
-  return u ? u.replace(/\\u0026/g, '&').replace(/\\/g, '') : u;
+function pickBiggest(items = []) {
+  return [...items]
+    .filter((item) => item?.url)
+    .sort(
+      (a, b) =>
+        (b.width || 0) * (b.height || 0) -
+        (a.width || 0) * (a.height || 0)
+    )[0] || null;
 }
 
 function normalizeItem(item) {
-  const isVideo = item.media_type === 2 || !!item.video_versions;
-  const vid = pickBiggest(item.video_versions);
-  const img = pickBiggest(item.image_versions2?.candidates);
-
-  const node = {
-    id: String(item.pk ?? item.id ?? ''),
+  const isVideo = item.media_type === 2 || Boolean(item.video_versions?.length);
+  const video = pickBiggest(item.video_versions);
+  const image = pickBiggest(item.image_versions2?.candidates);
+  const result = {
+    id: String(item.pk ?? item.id ?? ""),
     isVideo,
-    url: isVideo ? clean(vid?.url) : clean(img?.url),
-    thumb: clean(img?.url || vid?.url),
-    width: (isVideo ? vid?.width : img?.width) ?? null,
-    height: (isVideo ? vid?.height : img?.height) ?? null,
+    url: clean(isVideo ? video?.url : image?.url),
+    thumb: clean(image?.url || video?.url),
+    width: (isVideo ? video?.width : image?.width) ?? null,
+    height: (isVideo ? video?.height : image?.height) ?? null,
     username: item.user?.username || item.owner?.username || null,
     caption: item.caption?.text || null,
     takenAt: item.taken_at || null,
     children: [],
   };
-
   if (Array.isArray(item.carousel_media)) {
-    node.children = item.carousel_media.map(normalizeItem);
+    result.children = item.carousel_media.map(normalizeItem);
   }
-  return node;
+  return result;
 }
 
 function normalizeGraphql(node) {
-  const isVideo = node.is_video || !!node.video_url;
-  const out = {
-    id: node.id || node.shortcode || '',
+  const isVideo = Boolean(node.is_video || node.video_url);
+  const result = {
+    id: node.id || node.shortcode || "",
     isVideo,
     url: clean(isVideo ? node.video_url : node.display_url),
     thumb: clean(node.display_url),
@@ -110,69 +125,80 @@ function normalizeGraphql(node) {
     takenAt: node.taken_at_timestamp || null,
     children: [],
   };
-  const kids = node.edge_sidecar_to_children?.edges || [];
-  if (kids.length) out.children = kids.map((e) => normalizeGraphql(e.node));
-  return out;
+  const children = node.edge_sidecar_to_children?.edges || [];
+  if (children.length) result.children = children.map((edge) => normalizeGraphql(edge.node));
+  return result;
 }
 
 function parseInstagramUrl(input) {
-  let raw = String(input || '').trim();
+  let raw = String(input || "").trim();
   if (!raw) return null;
-  if (!/^https?:\\/\\//i.test(raw)) raw = 'https://' + raw;
 
-  let u;
+  // FIX: use escaped slashes correctly; the previous double-escaped regex caused a syntax error.
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+
+  let parsedUrl;
   try {
-    u = new URL(raw);
+    parsedUrl = new URL(raw);
   } catch {
     return null;
   }
-  if (!/(^|\\.)instagram\\.com$/i.test(u.hostname)) return null;
 
-  const p = u.pathname.split('/').filter(Boolean);
-  const s = (i) => p[i];
+  if (!/(^|\.)instagram\.com$/i.test(parsedUrl.hostname)) return null;
 
-  if (s(0) === 'share' && s(1)) return { kind: 'share', url: u.toString() };
+  const parts = parsedUrl.pathname.split("/").filter(Boolean);
+  const part = (index) => parts[index];
 
-  if (['p', 'reel', 'reels', 'tv'].includes(s(0)) && s(1))
-    return { kind: 'post', shortcode: s(1) };
-
-  if (s(0) === 'stories') {
-    if (s(1) === 'highlights' && s(2)) return { kind: 'highlight', id: s(2) };
-    if (s(1)) return { kind: 'story', username: s(1), storyId: s(2) || null };
+  if (part(0) === "share" && part(1)) {
+    return { kind: "share", url: parsedUrl.toString() };
   }
-
-  if (s(1) && ['p', 'reel', 'reels', 'tv'].includes(s(1)) && s(2))
-    return { kind: 'post', shortcode: s(2) };
-
+  if (["p", "reel", "reels", "tv"].includes(part(0)) && part(1)) {
+    return { kind: "post", shortcode: part(1) };
+  }
+  if (part(0) === "stories") {
+    if (part(1) === "highlights" && part(2)) {
+      return { kind: "highlight", id: part(2) };
+    }
+    if (part(1)) {
+      return { kind: "story", username: part(1), storyId: part(2) || null };
+    }
+  }
+  if (part(1) && ["p", "reel", "reels", "tv"].includes(part(1)) && part(2)) {
+    return { kind: "post", shortcode: part(2) };
+  }
   return null;
 }
 
 async function expandShare(url) {
-  const r = await fetch(url, { headers: igHeaders(), redirect: 'follow' });
-  return r.url;
+  const response = await fetchWithTimeout(
+    url,
+    { headers: igHeaders(), redirect: "follow" },
+    15000
+  );
+  return response.url;
 }
 
 async function resolveViaEmbed(shortcode) {
-  const r = await fetch(
-    `https://www.instagram.com/p/${shortcode}/embed/captioned/`,
+  const response = await fetchWithTimeout(
+    `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/embed/captioned/`,
     { headers: igHeaders() }
   );
-  if (!r.ok) throw new Error(`embed ${r.status}`);
-  const html = (await r.text()).replace(/\\\\/g, '');
+  if (!response.ok) throw new Error(`Instagram embed returned HTTP ${response.status}`);
 
+  const html = (await response.text()).replace(/\\/g, "");
   const video = html.match(/"video_url":"([^"]+)"/)?.[1];
   const image = html.match(/"display_url":"([^"]+)"/)?.[1];
-  const user = html.match(/"username":"([^"]+)"/)?.[1];
+  const username = html.match(/"username":"([^"]+)"/)?.[1];
 
-  if (!video && !image) throw new Error('embed parse fail');
+  if (!video && !image) throw new Error("Embed se media link nahi mila");
   return {
     id: shortcode,
-    isVideo: !!video,
+    isVideo: Boolean(video),
     url: clean(video || image),
     thumb: clean(image || video),
     width: null,
     height: null,
-    username: user || null,
+    username: username || null,
     caption: null,
     takenAt: null,
     children: [],
@@ -185,127 +211,172 @@ async function resolvePost(shortcode) {
 
   if (id) {
     try {
-      const j = await igJson(`https://www.instagram.com/api/v1/media/${id}/info/`);
-      const item = j.items?.[0];
-      if (item) return [normalizeItem(item)];
-    } catch (e) {
-      errors.push(e.message);
+      const data = await igJson(
+        `https://www.instagram.com/api/v1/media/${encodeURIComponent(id)}/info/`
+      );
+      if (data.items?.[0]) return [normalizeItem(data.items[0])];
+    } catch (error) {
+      errors.push(error.message);
     }
   }
 
   try {
-    const j = await igJson(
-      `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`
+    const data = await igJson(
+      `https://www.instagram.com/p/${encodeURIComponent(shortcode)}/?__a=1&__d=dis`
     );
-    if (j.graphql?.shortcode_media)
-      return [normalizeGraphql(j.graphql.shortcode_media)];
-    if (j.items?.[0]) return [normalizeItem(j.items[0])];
-  } catch (e) {
-    errors.push(e.message);
+    if (data.graphql?.shortcode_media) {
+      return [normalizeGraphql(data.graphql.shortcode_media)];
+    }
+    if (data.items?.[0]) return [normalizeItem(data.items[0])];
+  } catch (error) {
+    errors.push(error.message);
   }
 
   try {
     return [await resolveViaEmbed(shortcode)];
-  } catch (e) {
-    errors.push(e.message);
+  } catch (error) {
+    errors.push(error.message);
   }
 
-  throw new Error(errors.join(' | ') || 'Media fetch nahi hua');
+  throw new Error(errors.join(" | ") || "Media fetch nahi hua");
 }
 
-async function resolveReels(reelId, storyId) {
-  const j = await igJson(
-    `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(
-      reelId
-    )}`
+async function resolveReels(userId, storyId) {
+  const data = await igJson(
+    `https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=${encodeURIComponent(userId)}`
   );
 
   let items = [];
-  if (j.reels) items = Object.values(j.reels).flatMap((r) => r.items || []);
-  else if (j.reels_media) items = j.reels_media.flatMap((r) => r.items || []);
+  if (data.reels) {
+    items = Object.values(data.reels).flatMap((reel) => reel.items || []);
+  } else if (data.reels_media) {
+    items = data.reels_media.flatMap((reel) => reel.items || []);
+  }
 
-  if (storyId) items = items.filter((i) => String(i.pk) === String(storyId));
-  if (!items.length) throw new Error('Koi story nahi mili (expire ho gayi?)');
-
+  if (storyId) items = items.filter((item) => String(item.pk) === String(storyId));
+  if (!items.length) throw new Error("Story nahi mili; expire ya private ho sakti hai.");
   return items.map(normalizeItem);
 }
 
 async function resolveStory(username, storyId) {
-  const prof = await igJson(
-    `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(
-      username
-    )}`
+  const data = await igJson(
+    `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
   );
-  const userId = prof?.data?.user?.id;
-  if (!userId) throw new Error('Username nahi mila');
+  const userId = data?.data?.user?.id;
+  if (!userId) throw new Error("Username nahi mila ya profile accessible nahi hai.");
   return resolveReels(userId, storyId);
 }
 
-const resolveHighlight = (id) => resolveReels(`highlight:${id}`, null);
+async function resolveHighlight(id) {
+  return resolveReels(`highlight:${id}`, null);
+}
 
-app.post('/api/info', async (req, res) => {
+app.post("/api/info", async (req, res) => {
   try {
     let parsed = parseInstagramUrl(req.body?.url);
-    if (!parsed)
+    if (!parsed) {
       return res.status(400).json({
-        error: 'Valid Instagram link daalein (Reel / Post / Story / Highlight).',
+        error: "Valid Instagram link daalein (Reel / Post / Story / Highlight).",
       });
+    }
 
-    if (parsed.kind === 'share') {
+    if (parsed.kind === "share") {
       const finalUrl = await expandShare(parsed.url);
       parsed = parseInstagramUrl(finalUrl);
-      if (!parsed || parsed.kind === 'share')
-        return res.status(400).json({ error: 'Share link resolve nahi hua.' });
+      if (!parsed || parsed.kind === "share") {
+        return res.status(400).json({ error: "Share link resolve nahi hua." });
+      }
     }
 
     const key = JSON.stringify(parsed);
     const media = await cached(key, 5 * 60 * 1000, async () => {
       switch (parsed.kind) {
-        case 'post':
+        case "post":
           return resolvePost(parsed.shortcode);
-        case 'story':
+        case "story":
           return resolveStory(parsed.username, parsed.storyId);
-        case 'highlight':
+        case "highlight":
           return resolveHighlight(parsed.id);
         default:
-          throw new Error('Unsupported link');
+          throw new Error("Is link type ko support nahi kiya gaya.");
       }
     });
 
-    res.json({ type: parsed.kind, count: media.length, media });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message || 'Kuch galat ho gaya' });
-  }
-});
-
-app.get('/api/download', async (req, res) => {
-  try {
-    const { url, filename } = req.query;
-    if (!url) return res.status(400).send('url required');
-
-    const r = await fetch(String(url), {
-      headers: igHeaders({ Referer: 'https://www.instagram.com/' }),
+    return res.json({ type: parsed.kind, count: media.length, media });
+  } catch (error) {
+    console.error("Info endpoint error:", error);
+    return res.status(502).json({
+      error: error.message || "Instagram se media fetch nahi ho paya.",
     });
-    if (!r.ok || !r.body) return res.status(502).send('Upstream fail');
-
-    const safe = String(filename || 'instagram').replace(/[^\\w.\\-]/g, '_');
-    res.setHeader(
-      'Content-Type',
-      r.headers.get('content-type') || 'application/octet-stream'
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="${safe}"`);
-    const len = r.headers.get('content-length');
-    if (len) res.setHeader('Content-Length', len);
-
-    Readable.fromWeb(r.body).pipe(res);
-  } catch (e) {
-    res.status(500).send(e.message);
   }
 });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+function isAllowedMediaUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "instagram.com" ||
+      host.endsWith(".instagram.com") ||
+      host === "cdninstagram.com" ||
+      host.endsWith(".cdninstagram.com") ||
+      host === "fbcdn.net" ||
+      host.endsWith(".fbcdn.net")
+    );
+  } catch {
+    return false;
+  }
+}
 
-app.listen(PORT, () => {
-  console.log(`\\n  InstaSave running -> http://localhost:${PORT}\\n`);
+app.get("/api/download", async (req, res) => {
+  try {
+    const mediaUrl = String(req.query.url || "");
+    if (!mediaUrl) return res.status(400).send("url required");
+    if (!isAllowedMediaUrl(mediaUrl)) {
+      return res.status(400).send("Unsupported media URL");
+    }
+
+    const response = await fetchWithTimeout(
+      mediaUrl,
+      { headers: igHeaders({ Referer: "https://www.instagram.com/" }) },
+      30000
+    );
+
+    if (!response.ok || !response.body) {
+      return res.status(502).send(`Media server returned HTTP ${response.status}`);
+    }
+
+    const filename = String(req.query.filename || "instasave-media")
+      .replace(/[^\w.-]/g, "_")
+      .slice(0, 100);
+
+    res.setHeader(
+      "Content-Type",
+      response.headers.get("content-type") || "application/octet-stream"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename || "instasave-media"}"`);
+
+    const length = response.headers.get("content-length");
+    if (length) res.setHeader("Content-Length", length);
+
+    await pipeline(response.body, res);
+  } catch (error) {
+    console.error("Download endpoint error:", error);
+    if (!res.headersSent) {
+      res.status(502).send("Download fail hua. Link expire ho sakta hai; dobara try karein.");
+    } else {
+      res.destroy(error);
+    }
+  }
+});
+
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`InstaSave running on port ${PORT}`);
 });
