@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>InstaSave — Reels, Posts & Stories Downloader</title>
+<style>
+  :root{
+    --bg:#0a0a11; --card:#14141f; --card2:#1b1b2a; --line:#272740;
+    --txt:#eceef7; --muted:#8c8ca8;
+    --grad:linear-gradient(135deg,#f9ce34,#ee2a7b 48%,#6228d7);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:
+      radial-gradient(900px 480px at 50% -8%, #2a1b52 0%, transparent 70%),
+      radial-gradient(700px 400px at 100% 100%, #2b1040 0%, transparent 70%),
+      var(--bg);
+    color:var(--txt);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Inter,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:56px 20px 90px}
+  header{text-align:center;margin-bottom:34px}
+  .logo{display:inline-flex;align-items:center;gap:12px;font-weight:800;font-size:30px;letter-spacing:-.5px}
+  .dot{width:38px;height:38px;border-radius:11px;background:var(--grad);display:grid;place-items:center;font-size:20px}
+  header p{color:var(--muted);margin:12px 0 0;font-size:15px}
+  .search{display:flex;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:8px;margin-bottom:18px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+  .search input{flex:1;background:transparent;border:0;outline:0;color:var(--txt);font-size:15px;padding:12px 14px;min-width:0}
+  .search input::placeholder{color:#5c5c78}
+  button{border:0;cursor:pointer;font-family:inherit;font-weight:650;font-size:14px;border-radius:11px;padding:12px 18px;transition:.18s}
+  .btn-ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+  .btn-ghost:hover{background:#232338}
+  .btn-main{background:var(--grad);color:#fff;padding:12px 24px}
+  .btn-main:hover{filter:brightness(1.1)}
+  .btn-main:disabled{opacity:.5;cursor:not-allowed;filter:none}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:28px}
+  .chip{font-size:12.5px;color:var(--muted);background:#15152222;border:1px solid var(--line);padding:6px 13px;border-radius:99px}
+  .status{text-align:center;font-size:14px;min-height:22px;margin-bottom:20px;color:var(--muted)}
+  .status.err{color:#ff6b81}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #3a3a55;border-top-color:#ee2a7b;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;animation:pop .3s ease both}
+  @keyframes pop{from{opacity:0;transform:translateY(10px)}}
+  .thumb{width:100%;aspect-ratio:9/14;object-fit:cover;background:#0e0e18;display:block}
+  .body{padding:13px 14px 15px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .user{font-size:13.5px;font-weight:700;color:#fff}
+  .cap{font-size:12.5px;color:var(--muted);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .row{display:flex;gap:8px;margin-top:auto}
+  .row button{flex:1;padding:10px}
+  .tag{position:absolute;top:10px;left:10px;background:#000000aa;backdrop-filter:blur(6px);font-size:11px;font-weight:700;padding:4px 9px;border-radius:8px;letter-spacing:.4px}
+  .thumbwrap{position:relative}
+  .carousel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:34px 0 14px;font-size:15px;font-weight:700}
+  footer{text-align:center;color:#4e4e68;font-size:12.5px;margin-top:60px}
+  a{color:#b79dff}
+  @media(max-width:560px){.wrap{padding:36px 14px 60px}.search{flex-wrap:wrap}.search input{flex-basis:100%}.search button{flex:1;padding:11px 12px}.logo{font-size:27px}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><span class="dot">📥</span> InstaSave</div>
+    <p>Reels, Posts aur Stories — bina watermark, full quality.</p>
+  </header>
+  <div class="search">
+    <input id="url" type="text" spellcheck="false" placeholder="https://www.instagram.com/reel/xxxxxxx/  ya link paste karein" autocomplete="off" />
+    <button class="btn-ghost" id="pasteBtn" title="Clipboard se paste">Paste</button>
+    <button class="btn-main" id="goBtn">Download</button>
+  </div>
+  <div class="chips">
+    <span class="chip">Reel</span><span class="chip">Post</span><span class="chip">Carousel</span>
+    <span class="chip">Story</span><span class="chip">Highlight</span><span class="chip">No watermark</span>
+  </div>
+  <div class="status" id="status"></div>
+  <div id="out"></div>
+  <footer>Node.js + Express · Instagram public endpoints · koi API key nahi</footer>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const urlInput = $('url'), goBtn = $('goBtn'), statusEl = $('status'), out = $('out');
+let busy = false;
+function setStatus(msg, isErr) {
+  statusEl.className = 'status' + (isErr ? ' err' : '');
+  statusEl.innerHTML = msg ? (isErr ? '' : '<span class="spin"></span>') + msg : '';
+}
+function fname(item, idx) {
+  const u = (item.username || 'insta').replace(/[^\w]/g, '');
+  const ext = item.isVideo ? 'mp4' : 'jpg';
+  return `${u}_${item.id || Date.now()}_${idx ?? 0}.${ext}`;
+}
+function save(item, idx) {
+  if (!item.url) return;
+  const name = fname(item, idx);
+  const a = document.createElement('a');
+  a.href = '/api/download?url=' + encodeURIComponent(item.url) + '&filename=' + encodeURIComponent(name);
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+function saveAll(items) { items.forEach((it, i) => setTimeout(() => save(it, i), i * 450)); }
+function card(item, idx) {
+  const el = document.createElement('div'); el.className = 'card';
+  const tw = document.createElement('div'); tw.className = 'thumbwrap';
+  const img = document.createElement('img'); img.className = 'thumb'; img.loading = 'lazy';
+  img.src = item.thumb || item.url; img.alt = 'preview'; tw.appendChild(img);
+  if (item.isVideo) { const t = document.createElement('div'); t.className = 'tag'; t.textContent = '▶ VIDEO'; tw.appendChild(t); }
+  el.appendChild(tw);
+  const body = document.createElement('div'); body.className = 'body';
+  if (item.username) { const u = document.createElement('div'); u.className = 'user'; u.textContent = '@' + item.username; body.appendChild(u); }
+  if (item.caption) { const c = document.createElement('div'); c.className = 'cap'; c.textContent = item.caption; body.appendChild(c); }
+  const row = document.createElement('div'); row.className = 'row';
+  const b1 = document.createElement('button'); b1.className = 'btn-main'; b1.textContent = item.isVideo ? 'Download MP4' : 'Download JPG'; b1.onclick = () => save(item, idx);
+  const b2 = document.createElement('button'); b2.className = 'btn-ghost'; b2.textContent = 'Open'; b2.onclick = () => window.open(item.url, '_blank');
+  row.append(b1, b2); body.appendChild(row); el.appendChild(body); return el;
+}
+function render(data) {
+  out.innerHTML = ''; const media = data.media || [];
+  if (!media.length) return setStatus('Kuch nahi mila.', true);
+  media.forEach((item) => {
+    if (item.children && item.children.length) {
+      const head = document.createElement('div'); head.className = 'carousel-head';
+      const title = document.createElement('div'); title.textContent = `Carousel · ${item.children.length} items`;
+      const all = document.createElement('button'); all.className = 'btn-main'; all.textContent = 'Download All'; all.onclick = () => saveAll(item.children);
+      head.append(title, all); out.appendChild(head);
+      const g = document.createElement('div'); g.className = 'grid'; item.children.forEach((child, i) => g.appendChild(card(child, i))); out.appendChild(g);
+    } else { const g = document.createElement('div'); g.className = 'grid'; g.appendChild(card(item, 0)); out.appendChild(g); }
+  });
+  setStatus(`${media.length} item${media.length > 1 ? 's' : ''} mil gaye.`);
+}
+async function run() {
+  const url = urlInput.value.trim(); if (!url || busy) return;
+  busy = true; goBtn.disabled = true; out.innerHTML = ''; setStatus('Instagram se fetch kar raha hoon…');
+  try {
+    const r = await fetch('/api/info', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+    const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Request fail'); render(data);
+  } catch (e) { setStatus(e.message, true); }
+  finally { busy = false; goBtn.disabled = false; }
+}
+goBtn.onclick = run;
+urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+$('pasteBtn').onclick = async () => {
+  try { const t = await navigator.clipboard.readText(); if (t) { urlInput.value = t.trim(); run(); } }
+  catch { urlInput.focus(); setStatus('Clipboard permission deny hui — manually paste karein.', true); }
+};
+</script>
+</body>
+</html>
