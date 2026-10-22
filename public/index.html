@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <title>InstaSave - Media Downloader</title>
+
+  <meta
+    name="description"
+    content="InstaSave helps you access downloadable media links for public Instagram posts and Reels."
+  >
 
   <style>
     * {
@@ -31,7 +37,12 @@
       font-size: 38px;
       font-weight: bold;
       margin-bottom: 12px;
-      background: linear-gradient(90deg, #ff4b91, #a855f7, #4f8cff);
+      background: linear-gradient(
+        90deg,
+        #ff4b91,
+        #a855f7,
+        #4f8cff
+      );
       color: transparent;
       background-clip: text;
       -webkit-background-clip: text;
@@ -77,7 +88,16 @@
       font-size: 16px;
       font-weight: bold;
       cursor: pointer;
-      background: linear-gradient(90deg, #e1306c, #833ab4);
+      background: linear-gradient(
+        90deg,
+        #e1306c,
+        #833ab4
+      );
+      transition: opacity 0.2s ease;
+    }
+
+    button:hover {
+      opacity: 0.9;
     }
 
     button:disabled {
@@ -100,11 +120,16 @@
       border-radius: 12px;
     }
 
+    .result p {
+      line-height: 1.6;
+    }
+
     .result a {
       display: inline-block;
       color: #d8b4fe;
       margin-top: 12px;
       overflow-wrap: anywhere;
+      line-height: 1.6;
     }
 
     .note {
@@ -113,11 +138,35 @@
       line-height: 1.6;
       margin-top: 25px;
     }
+
+    @media (max-width: 480px) {
+      body {
+        padding: 16px;
+      }
+
+      .container {
+        margin: 55px auto;
+      }
+
+      .logo {
+        font-size: 34px;
+      }
+
+      .card {
+        padding: 20px;
+      }
+
+      input {
+        font-size: 14px;
+      }
+    }
   </style>
 </head>
 
 <body>
+
   <main class="container">
+
     <div class="logo">InstaSave</div>
 
     <p class="subtitle">
@@ -126,52 +175,108 @@
     </p>
 
     <section class="card">
+
       <form id="downloadForm">
+
         <input
           id="instagramUrl"
           type="url"
           placeholder="Paste Instagram URL here..."
+          autocomplete="url"
           required
         >
 
         <button id="submitButton" type="submit">
           Get Download Link
         </button>
+
       </form>
 
-      <div id="message" class="message" aria-live="polite"></div>
+      <div
+        id="message"
+        class="message"
+        role="status"
+        aria-live="polite"
+      ></div>
 
       <div id="result" class="result">
-        <p>Media link received.</p>
-        <a id="downloadLink" href="#" target="_blank"
-           rel="noopener noreferrer">Open media</a>
+
+        <p id="resultMessage">
+          Media link received.
+        </p>
+
+        <a
+          id="downloadLink"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Download Media
+        </a>
+
       </div>
+
     </section>
 
     <p class="note">
-      Only use this tool for content you own or have permission to download.
-      Private content may not be accessible.
+      Only use this tool for content you own or have permission to
+      download. Private content may not be accessible.
     </p>
+
   </main>
 
   <script>
+    "use strict";
+
     const form = document.getElementById("downloadForm");
     const input = document.getElementById("instagramUrl");
     const button = document.getElementById("submitButton");
     const message = document.getElementById("message");
     const result = document.getElementById("result");
+    const resultMessage = document.getElementById("resultMessage");
     const downloadLink = document.getElementById("downloadLink");
+
+    function showError(text) {
+      message.textContent = text;
+      result.style.display = "none";
+    }
+
+    async function readJsonResponse(response) {
+      const contentType =
+        response.headers.get("content-type") || "";
+
+      if (!contentType.toLowerCase().includes("application/json")) {
+        const status = response.status;
+
+        throw new Error(
+          "Server returned a non-JSON response (HTTP " +
+          status +
+          "). Please check the backend API."
+        );
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Unable to process this Instagram link."
+        );
+      }
+
+      return data;
+    }
 
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
 
       const url = input.value.trim();
+
       let parsedUrl;
 
       try {
         parsedUrl = new URL(url);
       } catch {
-        message.textContent = "Please enter a valid URL.";
+        showError("Please enter a valid Instagram URL.");
         return;
       }
 
@@ -181,42 +286,133 @@
         host !== "instagram.com" &&
         !host.endsWith(".instagram.com")
       ) {
-        message.textContent = "Please enter an Instagram URL.";
+        showError("Please enter a valid Instagram URL.");
+        return;
+      }
+
+      if (
+        parsedUrl.protocol !== "https:" &&
+        parsedUrl.protocol !== "http:"
+      ) {
+        showError("Please enter a valid web URL.");
         return;
       }
 
       button.disabled = true;
       button.textContent = "Checking...";
-      message.textContent = "";
+      message.textContent = "Checking the Instagram link...";
       result.style.display = "none";
 
       try {
-        const response = await fetch("/api/download?url=" +
-          encodeURIComponent(url));
 
-        const data = await response.json();
+        /*
+         * STEP 1:
+         * Send the original Instagram URL to /api/info.
+         *
+         * This endpoint expects a POST request containing JSON.
+         */
 
-        if (!response.ok) {
-          throw new Error(data.error || "Unable to process this link.");
+        const response = await fetch("/api/info", {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+
+          body: JSON.stringify({
+            url: url
+          })
+        });
+
+        const data = await readJsonResponse(response);
+
+        /*
+         * STEP 2:
+         * Get available media items from the server response.
+         */
+
+        const media = Array.isArray(data.media)
+          ? data.media
+          : [];
+
+        /*
+         * Include child items so that the first available item
+         * of a carousel can also be selected.
+         */
+
+        const candidates = media.flatMap(function (item) {
+          if (!item || typeof item !== "object") {
+            return [];
+          }
+
+          const children = Array.isArray(item.children)
+            ? item.children
+            : [];
+
+          return [item, ...children];
+        });
+
+        const item = candidates.find(function (entry) {
+          return (
+            entry &&
+            typeof entry.url === "string" &&
+            entry.url.length > 0
+          );
+        });
+
+        if (!item) {
+          throw new Error(
+            "No downloadable media was found. " +
+            "The post may be private or inaccessible."
+          );
         }
 
-        const mediaUrl = data.downloadUrl || data.url;
+        /*
+         * STEP 3:
+         * Pass the actual media URL to /api/download.
+         *
+         * Do not pass the original Instagram post URL here:
+         * the backend download endpoint expects a media URL.
+         */
 
-        if (!mediaUrl) {
-          throw new Error("No downloadable media link was returned.");
-        }
+        const extension = item.isVideo ? "mp4" : "jpg";
 
-        downloadLink.href = mediaUrl;
+        const params = new URLSearchParams({
+          url: item.url,
+          filename: "instasave." + extension
+        });
+
+        downloadLink.href = "/api/download?" + params.toString();
+
+        downloadLink.textContent = item.isVideo
+          ? "Download Video"
+          : "Download Image";
+
+        resultMessage.textContent =
+          "Media found. Tap the button below to download.";
+
         result.style.display = "block";
-        message.textContent = "Media link found.";
+
+        message.textContent = "Media link found successfully.";
+
       } catch (error) {
-        message.textContent =
-          error.message || "Something went wrong. Please try again.";
+
+        console.error("InstaSave request failed:", error);
+
+        showError(
+          error.message ||
+          "Something went wrong. Please try again."
+        );
+
       } finally {
+
         button.disabled = false;
         button.textContent = "Get Download Link";
+
       }
     });
   </script>
+
 </body>
-        </html>
+</html>
