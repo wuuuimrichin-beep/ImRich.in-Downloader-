@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InstaSave - Media Downloader</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      background: #09090f;
+      color: white;
+      padding: 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 600px;
+      margin: 70px auto;
+      text-align: center;
+    }
+
+    .logo {
+      font-size: 38px;
+      font-weight: bold;
+      margin-bottom: 12px;
+      background: linear-gradient(90deg, #ff4b91, #a855f7, #4f8cff);
+      color: transparent;
+      background-clip: text;
+      -webkit-background-clip: text;
+    }
+
+    .subtitle {
+      color: #aaaabb;
+      line-height: 1.6;
+      margin-bottom: 30px;
+    }
+
+    .card {
+      background: #14141e;
+      border: 1px solid #29293b;
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 0 35px #7c3aed16;
+    }
+
+    input {
+      display: block;
+      width: 100%;
+      padding: 16px;
+      background: #09090f;
+      border: 1px solid #343449;
+      border-radius: 12px;
+      color: white;
+      outline: none;
+      font-size: 15px;
+      margin-bottom: 14px;
+    }
+
+    input:focus {
+      border-color: #a855f7;
+    }
+
+    button {
+      width: 100%;
+      padding: 15px;
+      border: none;
+      border-radius: 12px;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      background: linear-gradient(90deg, #e1306c, #833ab4);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+
+    .message {
+      margin-top: 18px;
+      font-size: 14px;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .result {
+      display: none;
+      margin-top: 20px;
+      padding: 16px;
+      background: #202030;
+      border-radius: 12px;
+    }
+
+    .result a {
+      display: inline-block;
+      color: #d8b4fe;
+      margin-top: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .note {
+      color: #888899;
+      font-size: 12px;
+      line-height: 1.6;
+      margin-top: 25px;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <div class="logo">InstaSave</div>
+
+    <p class="subtitle">
+      Paste a public Instagram post or Reel link to check whether
+      a downloadable media link is available.
+    </p>
+
+    <section class="card">
+      <form id="downloadForm">
+        <input
+          id="instagramUrl"
+          type="url"
+          placeholder="Paste Instagram URL here..."
+          required
+        >
+
+        <button id="submitButton" type="submit">
+          Get Download Link
+        </button>
+      </form>
+
+      <div id="message" class="message" aria-live="polite"></div>
+
+      <div id="result" class="result">
+        <p>Media link received.</p>
+        <a id="downloadLink" href="#" target="_blank"
+           rel="noopener noreferrer">Open media</a>
+      </div>
+    </section>
+
+    <p class="note">
+      Only use this tool for content you own or have permission to download.
+      Private content may not be accessible.
+    </p>
+  </main>
+
+  <script>
+    const form = document.getElementById("downloadForm");
+    const input = document.getElementById("instagramUrl");
+    const button = document.getElementById("submitButton");
+    const message = document.getElementById("message");
+    const result = document.getElementById("result");
+    const downloadLink = document.getElementById("downloadLink");
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      const url = input.value.trim();
+      let parsedUrl;
+
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        message.textContent = "Please enter a valid URL.";
+        return;
+      }
+
+      const host = parsedUrl.hostname.toLowerCase();
+
+      if (
+        host !== "instagram.com" &&
+        !host.endsWith(".instagram.com")
+      ) {
+        message.textContent = "Please enter an Instagram URL.";
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Checking...";
+      message.textContent = "";
+      result.style.display = "none";
+
+      try {
+        const response = await fetch("/api/download?url=" +
+          encodeURIComponent(url));
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Unable to process this link.");
+        }
+
+        const mediaUrl = data.downloadUrl || data.url;
+
+        if (!mediaUrl) {
+          throw new Error("No downloadable media link was returned.");
+        }
+
+        downloadLink.href = mediaUrl;
+        result.style.display = "block";
+        message.textContent = "Media link found.";
+      } catch (error) {
+        message.textContent =
+          error.message || "Something went wrong. Please try again.";
+      } finally {
+        button.disabled = false;
+        button.textContent = "Get Download Link";
+      }
+    });
+  </script>
+</body>
+        </html>
